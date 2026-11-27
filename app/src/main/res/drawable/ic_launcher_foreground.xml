@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- busur speedometer -->
+    <path
+        android:pathData="M33,71 A27,27 0 1,1 75,71"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeColor="#1E88FF"
+        android:fillColor="#00000000" />
+    <!-- jarum -->
+    <path
+        android:pathData="M54,57 L67,41"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeColor="#38D5FF"
+        android:fillColor="#00000000" />
+    <!-- poros -->
+    <path
+        android:pathData="M54,57 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0"
+        android:fillColor="#FFFFFF" />
+</vector>

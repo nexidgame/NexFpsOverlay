@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="white">#FFFFFFFF</color>
+    <color name="gh_bg">#FF08080A</color>
+    <color name="nex_blue">#FF1E88FF</color>
+    <color name="ic_launcher_background">#FF0B1623</color>
+</resources>
