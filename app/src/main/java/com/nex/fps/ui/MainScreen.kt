@@ -623,11 +623,11 @@ private val MetricDefs = listOf(
     MetricDef("Avg Power", "W", GhGreen, 1, true, "Daya (Watt)")
 )
 
-/** src: sumber suhu, 0 = CPU, 1 = GPU (hanya dipakai metrik suhu). */
+/** src: sumber suhu, 0 = CPU, 1 = GPU, 2 = BAT (hanya dipakai metrik suhu). */
 private fun seriesOf(s: Session, m: Int, src: Int): List<Float> = when (m) {
     0, 1 -> s.fps
     2 -> s.frameMs
-    3 -> if (src == 1) s.tempGpu else s.temp
+    3 -> when (src) { 1 -> s.tempGpu; 2 -> s.tempBat; else -> s.temp }
     else -> s.power
 }
 
@@ -635,9 +635,11 @@ private fun aggOf(s: Session, m: Int, src: Int): Float = when (m) {
     0 -> s.avgFps
     1 -> s.low5Fps
     2 -> s.avgFrameMs
-    3 -> if (src == 1) s.maxTempGpu else s.maxTemp
+    3 -> when (src) { 1 -> s.maxTempGpu; 2 -> s.maxTempBat; else -> s.maxTemp }
     else -> s.avgPower
 }
+
+private fun tempName(src: Int): String = when (src) { 1 -> "GPU"; 2 -> "BAT"; else -> "CPU" }
 
 private fun fmt(v: Float, decimals: Int): String = String.format(Locale.getDefault(), "%.${decimals}f", v)
 
@@ -710,7 +712,7 @@ private fun HistoryTab(ui: UiState) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (i in MetricDefs.indices) {
                     MetricTile(
-                        MetricDefs[i], if (i == 3) (if (tempSrc == 1) "Max GPU" else "Max CPU") else MetricDefs[i].label,
+                        MetricDefs[i], if (i == 3) "Max ${tempName(tempSrc)}" else MetricDefs[i].label,
                         aggOf(sel, i, tempSrc), i == metric, Modifier.weight(1f)
                     ) { metric = i }
                 }
@@ -794,6 +796,8 @@ private fun ChartCard(s: Session, metric: Int, src: Int, onSrc: (Int) -> Unit, m
                     MiniChip("CPU", src == 0) { onSrc(0) }
                     Spacer(Modifier.width(4.dp))
                     MiniChip("GPU", src == 1) { onSrc(1) }
+                    Spacer(Modifier.width(4.dp))
+                    MiniChip("BAT", src == 2) { onSrc(2) }
                     Spacer(Modifier.weight(1f))
                 }
                 if (values.isNotEmpty()) {
@@ -810,7 +814,7 @@ private fun ChartCard(s: Session, metric: Int, src: Int, onSrc: (Int) -> Unit, m
             Spacer(Modifier.height(6.dp))
             if (values.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(if (metric == 3) "Sensor suhu ${if (src == 1) "GPU" else "CPU"} tidak tersedia." else "Sensor ini tidak tersedia di perangkat.", color = GhMuted, fontSize = 13.sp)
+                    Text(if (metric == 3) "Sensor suhu ${tempName(src)} tidak tersedia." else "Sensor ini tidak tersedia di perangkat.", color = GhMuted, fontSize = 13.sp)
                 }
             } else {
                 LineChart(
@@ -840,7 +844,7 @@ private fun MiniChip(label: String, selected: Boolean, onClick: () -> Unit) {
             .background(if (selected) GhRed.copy(alpha = 0.18f) else GhCard2)
             .border(1.dp, if (selected) GhRed else Color.Transparent, shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 9.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(label, color = if (selected) GhRed else GhMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
