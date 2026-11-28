@@ -616,6 +616,7 @@ private fun SetupCard(
 // ======================================================================
 
 private val GhViolet = Color(0xFFB388FF)
+private val GhOrange = Color(0xFFFF8A3D)
 private val RefWhite = Color(0xCCFFFFFF)
 
 /** Satu tampilan grafik: judul, seri, nilai ringkasan (juga garis acuan) dan teks sekitarnya. */
@@ -648,7 +649,7 @@ private fun chartSpec(s: Session, m: Int, sub: Int): Spec = when (m) {
     }
     1 -> Spec("5% Low", "FPS per detik, garis = 5% Low", "fps", 0, true, GhAmber, s.fps, s.low5Fps, "5% Low ", GhAmber, "Min", "Maks")
     2 -> when (sub) {
-        1 -> Spec("Smoothness", "FPS Smoothness (%)", "%", 0, true, GhGreen, s.smooth, s.avgSmooth, "Rata-rata ", RefWhite, "Min", "Maks", 100f)
+        1 -> Spec("Smoothness", "FPS Smoothness (%)", "%", 0, true, GhOrange, s.smooth, s.avgSmooth, "Rata-rata ", RefWhite, "Min", "Maks", 100f)
         2 -> Spec("Variance", "Variance (ms²)", "ms²", -1, true, GhViolet, s.variance, s.varianceAll, "Total ", RefWhite, "Min", "Maks")
         else -> Spec("Frametime", "Frametime (ms)", "ms", 1, true, GhCyan, s.frameMs, s.avgFrameMs, "Rata-rata ", RefWhite, "Min", "Maks")
     }
