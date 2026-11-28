@@ -30,7 +30,15 @@ class Session(
     val tempGpu: List<Float> = emptyList(),   // suhu GPU (temp = suhu CPU)
     val maxTempGpu: Float = -1f,
     val tempBat: List<Float> = emptyList(),   // suhu baterai
-    val maxTempBat: Float = -1f
+    val maxTempBat: Float = -1f,
+    val fpsMax: List<Float> = emptyList(),    // FPS puncak per titik (1000 / frametime terkecil)
+    val fpsMin: List<Float> = emptyList(),    // FPS terendah per titik (1000 / frametime terbesar)
+    val smooth: List<Float> = emptyList(),    // FPS Smoothness (%) per titik
+    val variance: List<Float> = emptyList(),  // varian frametime (ms^2) per titik
+    val maxFps: Float = -1f,
+    val minFps: Float = -1f,
+    val avgSmooth: Float = -1f,
+    val varianceAll: Float = -1f
 )
 
 /** Riwayat sesi (maksimal 5), disimpan di SharedPreferences sebagai JSON kecil. */
@@ -120,6 +128,10 @@ object SessionStore {
         .put("temp", series(s.temp)).put("pw", series(s.power))
         .put("tempG", series(s.tempGpu)).put("maxTG", s.maxTempGpu.toDouble())
         .put("tempB", series(s.tempBat)).put("maxTB", s.maxTempBat.toDouble())
+        .put("fMax", series(s.fpsMax)).put("fMin", series(s.fpsMin))
+        .put("sm", series(s.smooth)).put("var", series(s.variance))
+        .put("maxF", s.maxFps.toDouble()).put("minF", s.minFps.toDouble())
+        .put("avgSm", s.avgSmooth.toDouble()).put("varAll", s.varianceAll.toDouble())
 
     private fun fromJson(o: JSONObject) = Session(
         id = o.getLong("id"),
@@ -139,7 +151,15 @@ object SessionStore {
         tempGpu = readSeries(o.optJSONArray("tempG")),
         maxTempGpu = o.optDouble("maxTG", -1.0).toFloat(),
         tempBat = readSeries(o.optJSONArray("tempB")),
-        maxTempBat = o.optDouble("maxTB", -1.0).toFloat()
+        maxTempBat = o.optDouble("maxTB", -1.0).toFloat(),
+        fpsMax = readSeries(o.optJSONArray("fMax")),
+        fpsMin = readSeries(o.optJSONArray("fMin")),
+        smooth = readSeries(o.optJSONArray("sm")),
+        variance = readSeries(o.optJSONArray("var")),
+        maxFps = o.optDouble("maxF", -1.0).toFloat(),
+        minFps = o.optDouble("minF", -1.0).toFloat(),
+        avgSmooth = o.optDouble("avgSm", -1.0).toFloat(),
+        varianceAll = o.optDouble("varAll", -1.0).toFloat()
     )
 }
 
@@ -168,6 +188,11 @@ class SessionRecorder(private val ctx: Context) {
     private val temp = ArrayList<Float>()
     private val tempGpu = ArrayList<Float>()
     private val tempBat = ArrayList<Float>()
+    private val fpsMaxL = ArrayList<Float>()
+    private val fpsMinL = ArrayList<Float>()
+    private val smoothL = ArrayList<Float>()
+    private val varL = ArrayList<Float>()
+    private var sumSqMs = 0.0
     private val power = ArrayList<Float>()
     private val hist = IntArray(BUCKETS)
     private var frameCount = 0L
@@ -202,6 +227,8 @@ class SessionRecorder(private val ctx: Context) {
 
     private fun clear() {
         fps.clear(); frameMs.clear(); temp.clear(); tempGpu.clear(); tempBat.clear(); power.clear()
+        fpsMaxL.clear(); fpsMinL.clear(); smoothL.clear(); varL.clear()
+        sumSqMs = 0.0
         java.util.Arrays.fill(hist, 0)
         frameCount = 0L
         frameSumNs = 0L
@@ -224,6 +251,39 @@ class SessionRecorder(private val ctx: Context) {
             sum += d
         }
         frameMs.add(if (t.frames.isNotEmpty()) sum / 1e6f / t.frames.size else 0f)
+
+        // Per tick (1 detik): FPS puncak/terendah dari frametime terkecil/terbesar, smoothness, dan varian.
+        val n = t.frames.size
+        if (n > 0) {
+            var mn = Long.MAX_VALUE
+            var mx = 0L
+            var sumD = 0.0
+            var sumSq = 0.0
+            for (d in t.frames) {
+                val ms = d / 1e6
+                sumD += ms
+                sumSq += ms * ms
+                if (d < mn) mn = d
+                if (d > mx) mx = d
+            }
+            val mean = sumD / n
+            val variance = maxOf(0.0, sumSq / n - mean * mean)
+            sumSqMs += sumSq
+            fpsMaxL.add(1000f / (mn / 1e6f))
+            fpsMinL.add(1000f / (mx / 1e6f))
+            if (n >= 2 && mean > 0.0) {
+                smoothL.add((100.0 * (1.0 - minOf(1.0, Math.sqrt(variance) / mean))).toFloat())
+                varL.add(variance.toFloat())
+            } else {
+                smoothL.add(-1f)
+                varL.add(-1f)
+            }
+        } else {
+            fpsMaxL.add(t.data.fps.toFloat())
+            fpsMinL.add(t.data.fps.toFloat())
+            smoothL.add(-1f)
+            varL.add(-1f)
+        }
     }
 
     @Synchronized
@@ -259,6 +319,18 @@ class SessionRecorder(private val ctx: Context) {
             low5 = fpsPos.sorted().take(maxOf(1, fpsPos.size * 5 / 100)).average().toFloat()
         }
 
+        val fMaxPos = fpsMaxL.filter { it > 0f }
+        val fMinPos = fpsMinL.filter { it > 0f }
+        val maxFps = if (fMaxPos.isEmpty()) -1f else fMaxPos.max()
+        val minFps = if (fMinPos.isEmpty()) -1f else fMinPos.min()
+        val smoothS = fillSeries(smoothL)
+        val avgSm = if (smoothS.isEmpty()) -1f else smoothS.average().toFloat()
+        val varS = fillSeries(varL)
+        var varAll = -1f
+        if (frameCount > 1L) {
+            val mean = frameSumNs / 1e6 / frameCount
+            varAll = maxOf(0.0, sumSqMs / frameCount - mean * mean).toFloat()
+        }
         val tempS = fillSeries(temp)
         val tempGS = fillSeries(tempGpu)
         val maxTG = if (tempGS.isEmpty()) -1f else tempGS.max()
@@ -278,14 +350,19 @@ class SessionRecorder(private val ctx: Context) {
             Session(
                 id = startMs, startMs = startMs, durationSec = dur, pkg = pkg, label = label,
                 avgFps = avgFps, low5Fps = low5, avgFrameMs = avgMs, maxTemp = maxT, avgPower = avgP,
-                fps = shrink(fps, false),
-                frameMs = shrink(frameMs, false),
-                temp = shrink(tempS, true),
-                power = shrink(powS, false),
-                tempGpu = shrink(tempGS, true),
+                fps = shrink(fps, 0),
+                frameMs = shrink(frameMs, 0),
+                temp = shrink(tempS, 1),
+                power = shrink(powS, 0),
+                tempGpu = shrink(tempGS, 1),
                 maxTempGpu = maxTG,
-                tempBat = shrink(tempBS, true),
-                maxTempBat = maxTB
+                tempBat = shrink(tempBS, 1),
+                maxTempBat = maxTB,
+                fpsMax = shrink(fpsMaxL, 1),
+                fpsMin = shrink(fpsMinL, 2),
+                smooth = shrink(smoothS, 0),
+                variance = shrink(varS, 0),
+                maxFps = maxFps, minFps = minFps, avgSmooth = avgSm, varianceAll = varAll
             )
         )
     }
@@ -302,15 +379,15 @@ class SessionRecorder(private val ctx: Context) {
         return out
     }
 
-    /** Ringkas ke maksimal [MAX_POINTS] titik: rata-rata per kelompok (atau nilai tertinggi bila useMax). */
-    private fun shrink(src: List<Float>, useMax: Boolean): List<Float> {
+    /** Ringkas ke maksimal [MAX_POINTS] titik: rata-rata per kelompok (mode 1 = nilai tertinggi, 2 = terendah). */
+    private fun shrink(src: List<Float>, mode: Int): List<Float> {
         if (src.size <= MAX_POINTS) return src.toList()
         val out = ArrayList<Float>(MAX_POINTS)
         for (i in 0 until MAX_POINTS) {
             val a = i * src.size / MAX_POINTS
             val b = maxOf(a + 1, (i + 1) * src.size / MAX_POINTS)
             val part = src.subList(a, b)
-            out.add(if (useMax) part.max() else part.average().toFloat())
+            out.add(when (mode) { 1 -> part.max(); 2 -> part.min(); else -> part.average().toFloat() })
         }
         return out
     }
