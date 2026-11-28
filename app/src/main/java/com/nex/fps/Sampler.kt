@@ -154,6 +154,7 @@ class Sampler(private val ctx: Context) {
 
         var tempC = -1f
         var gpuTempC = -1f
+        var batTempC = -1f
         var powerW = -1f
         if (cfg.record) {
             var z = zones
@@ -169,7 +170,9 @@ class Sampler(private val ctx: Context) {
                 tempC = Parsers.maxTempC(z.first.mapNotNull { tmap[it] })
                 gpuTempC = Parsers.maxTempC(z.second.mapNotNull { tmap[it] })
             }
-            powerW = readPower(sec["PWR"] ?: emptyList())
+            val pb = readPower(sec["PWR"] ?: emptyList())
+            powerW = pb.first
+            batTempC = pb.second
         }
 
         return Tick(
@@ -178,7 +181,7 @@ class Sampler(private val ctx: Context) {
                 fps = fps, cpuPct = cpuPct, cpuMhz = cpuMhz,
                 gpuPct = gpu.pct, gpuMhz = gpu.mhz,
                 ramPct = ramPct, ramUsedMb = ramMb, resP = resP,
-                tempC = tempC, gpuTempC = gpuTempC, powerW = powerW
+                tempC = tempC, gpuTempC = gpuTempC, batTempC = batTempC, powerW = powerW
             ),
             fg, deltas
         )
@@ -217,28 +220,36 @@ class Sampler(private val ctx: Context) {
         return out.toLongArray()
     }
 
-    /** Daya perangkat (W) dari arus x tegangan baterai. Cadangan: BatteryManager tanpa Shizuku. */
-    private fun readPower(pwr: List<String>): Float {
+    /** Daya perangkat (W) dari arus x tegangan baterai, dan suhu baterai. Cadangan: BatteryManager tanpa Shizuku. */
+    private fun readPower(pwr: List<String>): Pair<Float, Float> {
         var cur = 0L
         var volt = 0L
+        var batt = -1f
         for (l in pwr) {
             if (l.length < 3 || l[1] != ':') continue
             val v = l.substring(2).trim().toLongOrNull() ?: continue
             when (l[0]) {
                 'I' -> cur = v
                 'V' -> volt = v
+                'T' -> batt = Parsers.batteryTempC(v)
             }
         }
         var power = Parsers.powerW(cur, volt)
-        if (power < 0f) {
+        if (power < 0f || batt < 0f) {
             val i: Intent? = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             if (i != null) {
-                val mv = i.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1).toLong()
-                val ua = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
-                power = Parsers.powerW(ua, mv)
+                if (batt < 0f) {
+                    val t = i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
+                    if (t > 0) batt = t / 10f
+                }
+                if (power < 0f) {
+                    val mv = i.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1).toLong()
+                    val ua = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+                    power = Parsers.powerW(ua, mv)
+                }
             }
         }
-        return power
+        return Pair(power, batt)
     }
 
     private fun quote(s: String): String = "'" + s.replace("'", "'\\''") + "'"

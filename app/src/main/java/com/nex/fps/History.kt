@@ -28,7 +28,9 @@ class Session(
     val temp: List<Float>,
     val power: List<Float>,
     val tempGpu: List<Float> = emptyList(),   // suhu GPU (temp = suhu CPU)
-    val maxTempGpu: Float = -1f
+    val maxTempGpu: Float = -1f,
+    val tempBat: List<Float> = emptyList(),   // suhu baterai
+    val maxTempBat: Float = -1f
 )
 
 /** Riwayat sesi (maksimal 5), disimpan di SharedPreferences sebagai JSON kecil. */
@@ -117,6 +119,7 @@ object SessionStore {
         .put("fps", series(s.fps)).put("ms", series(s.frameMs))
         .put("temp", series(s.temp)).put("pw", series(s.power))
         .put("tempG", series(s.tempGpu)).put("maxTG", s.maxTempGpu.toDouble())
+        .put("tempB", series(s.tempBat)).put("maxTB", s.maxTempBat.toDouble())
 
     private fun fromJson(o: JSONObject) = Session(
         id = o.getLong("id"),
@@ -134,7 +137,9 @@ object SessionStore {
         temp = readSeries(o.optJSONArray("temp")),
         power = readSeries(o.optJSONArray("pw")),
         tempGpu = readSeries(o.optJSONArray("tempG")),
-        maxTempGpu = o.optDouble("maxTG", -1.0).toFloat()
+        maxTempGpu = o.optDouble("maxTG", -1.0).toFloat(),
+        tempBat = readSeries(o.optJSONArray("tempB")),
+        maxTempBat = o.optDouble("maxTB", -1.0).toFloat()
     )
 }
 
@@ -162,6 +167,7 @@ class SessionRecorder(private val ctx: Context) {
     private val frameMs = ArrayList<Float>()
     private val temp = ArrayList<Float>()
     private val tempGpu = ArrayList<Float>()
+    private val tempBat = ArrayList<Float>()
     private val power = ArrayList<Float>()
     private val hist = IntArray(BUCKETS)
     private var frameCount = 0L
@@ -195,7 +201,7 @@ class SessionRecorder(private val ctx: Context) {
     }
 
     private fun clear() {
-        fps.clear(); frameMs.clear(); temp.clear(); tempGpu.clear(); power.clear()
+        fps.clear(); frameMs.clear(); temp.clear(); tempGpu.clear(); tempBat.clear(); power.clear()
         java.util.Arrays.fill(hist, 0)
         frameCount = 0L
         frameSumNs = 0L
@@ -207,6 +213,7 @@ class SessionRecorder(private val ctx: Context) {
         fps.add(t.data.fps.toFloat())
         temp.add(t.data.tempC)
         tempGpu.add(t.data.gpuTempC)
+        tempBat.add(t.data.batTempC)
         power.add(t.data.powerW)
         var sum = 0L
         for (d in t.frames) {
@@ -255,6 +262,8 @@ class SessionRecorder(private val ctx: Context) {
         val tempS = fillSeries(temp)
         val tempGS = fillSeries(tempGpu)
         val maxTG = if (tempGS.isEmpty()) -1f else tempGS.max()
+        val tempBS = fillSeries(tempBat)
+        val maxTB = if (tempBS.isEmpty()) -1f else tempBS.max()
         val powS = fillSeries(power)
         val maxT = if (tempS.isEmpty()) -1f else tempS.max()
         val avgP = if (powS.isEmpty()) -1f else powS.average().toFloat()
@@ -274,7 +283,9 @@ class SessionRecorder(private val ctx: Context) {
                 temp = shrink(tempS, true),
                 power = shrink(powS, false),
                 tempGpu = shrink(tempGS, true),
-                maxTempGpu = maxTG
+                maxTempGpu = maxTG,
+                tempBat = shrink(tempBS, true),
+                maxTempBat = maxTB
             )
         )
     }

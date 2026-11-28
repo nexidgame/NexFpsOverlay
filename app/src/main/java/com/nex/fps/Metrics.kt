@@ -12,6 +12,7 @@ data class Snapshot(
     val resP: Int = 0,
     val tempC: Float = -1f,     // suhu CPU (zona termal tertinggi), derajat Celsius
     val gpuTempC: Float = -1f,  // suhu GPU, derajat Celsius
+    val batTempC: Float = -1f,  // suhu baterai, derajat Celsius
     val powerW: Float = -1f     // daya perangkat dari arus x tegangan baterai, Watt
 )
 
