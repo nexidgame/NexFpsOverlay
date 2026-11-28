@@ -10,7 +10,8 @@ data class Snapshot(
     val ramPct: Int = -1,
     val ramUsedMb: Int = -1,
     val resP: Int = 0,
-    val tempC: Float = -1f,     // suhu tertinggi (baterai / zona termal), derajat Celsius
+    val tempC: Float = -1f,     // suhu CPU (zona termal tertinggi), derajat Celsius
+    val gpuTempC: Float = -1f,  // suhu GPU, derajat Celsius
     val powerW: Float = -1f     // daya perangkat dari arus x tegangan baterai, Watt
 )
 
@@ -95,6 +96,32 @@ object Parsers {
     }
 
     // ---- Suhu dan daya ------------------------------------------------------
+
+    private val zoneBad = Regex(
+        "batt|charg|bms|modem|mdm|usb|xo-|wifi|skin|pm8|pmic|quiet|ibat|vbat|nvm|flash|ddr|pa-",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** Keluaran `grep -H .` ("/sys/.../thermal_zoneN/type:isi") menjadi peta folder zona -> isi. */
+    fun parseKeyed(lines: List<String>): Map<String, String> {
+        val out = HashMap<String, String>()
+        for (l in lines) {
+            val i = l.indexOf(':')
+            if (i <= 0) continue
+            val dir = l.substring(0, i).substringBeforeLast('/')
+            out[dir] = l.substring(i + 1).trim()
+        }
+        return out
+    }
+
+    /** Zona termal CPU dan GPU (folder zona). Bila tak ada zona "cpu", dipakai zona "soc". */
+    fun pickZones(types: Map<String, String>): Pair<Set<String>, Set<String>> {
+        val good = types.filter { (_, t) -> !zoneBad.containsMatchIn(t) }
+        val cpu = good.filter { (_, t) -> t.contains("cpu", true) || t.contains("kryo", true) }.keys.toSet()
+        val gpu = good.filter { (_, t) -> t.contains("gpu", true) }.keys.toSet()
+        val cpuFinal = if (cpu.isNotEmpty()) cpu else good.filter { (_, t) -> t.contains("soc", true) }.keys.toSet()
+        return Pair(cpuFinal, gpu)
+    }
 
     /** Suhu tertinggi dari daftar nilai thermal_zone (miliderajat atau derajat). -1 bila tidak ada. */
     fun maxTempC(lines: List<String>): Float {

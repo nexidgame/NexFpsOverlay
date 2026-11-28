@@ -39,9 +39,10 @@ class Sampler(private val ctx: Context) {
     private var prevCpu: Parsers.CpuTimes? = null
 
     private var lastFrameNs = 0L
+    private var zones: Pair<Set<String>, Set<String>>? = null   // (zona CPU, zona GPU); null = belum dibaca
     private val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
 
-    private val markers = setOf("#FG", "#STAT", "#FREQ", "#GPU", "#FPS", "#PWR", "#TEMP")
+    private val markers = setOf("#FG", "#STAT", "#FREQ", "#GPU", "#FPS", "#PWR", "#TZT", "#TEMP")
 
     private fun reset() {
         activePkg = null
@@ -76,7 +77,13 @@ class Sampler(private val ctx: Context) {
                 cmd.append("echo \"I:$(cat /sys/class/power_supply/battery/current_now 2>/dev/null)\"\n")
                 cmd.append("echo \"V:$(cat /sys/class/power_supply/battery/voltage_now 2>/dev/null)\"\n")
                 cmd.append("echo \"T:$(cat /sys/class/power_supply/battery/temp 2>/dev/null)\"\n")
-                cmd.append("echo '#TEMP'\ncat /sys/class/thermal/thermal_zone*/temp 2>/dev/null\n")
+                val z = zones
+                if (z == null) {
+                    cmd.append("echo '#TZT'\ngrep -H . /sys/class/thermal/thermal_zone*/type 2>/dev/null\n")
+                    cmd.append("echo '#TEMP'\ngrep -H . /sys/class/thermal/thermal_zone*/temp 2>/dev/null\n")
+                } else if (z.first.isNotEmpty() || z.second.isNotEmpty()) {
+                    cmd.append("echo '#TEMP'\ngrep -H . ").append((z.first + z.second).joinToString(" ") { "$it/temp" }).append(" 2>/dev/null\n")
+                }
             }
             val l = layer
             if (cfg.showFps && l != null) {
@@ -146,11 +153,23 @@ class Sampler(private val ctx: Context) {
         }
 
         var tempC = -1f
+        var gpuTempC = -1f
         var powerW = -1f
         if (cfg.record) {
-            val (t, p) = readThermalPower(sec["PWR"] ?: emptyList(), sec["TEMP"] ?: emptyList())
-            tempC = t
-            powerW = p
+            var z = zones
+            if (z == null) {
+                val types = Parsers.parseKeyed(sec["TZT"] ?: emptyList())
+                if (types.isNotEmpty()) {
+                    z = Parsers.pickZones(types)
+                    zones = z
+                }
+            }
+            if (z != null) {
+                val tmap = Parsers.parseKeyed(sec["TEMP"] ?: emptyList())
+                tempC = Parsers.maxTempC(z.first.mapNotNull { tmap[it] })
+                gpuTempC = Parsers.maxTempC(z.second.mapNotNull { tmap[it] })
+            }
+            powerW = readPower(sec["PWR"] ?: emptyList())
         }
 
         return Tick(
@@ -159,7 +178,7 @@ class Sampler(private val ctx: Context) {
                 fps = fps, cpuPct = cpuPct, cpuMhz = cpuMhz,
                 gpuPct = gpu.pct, gpuMhz = gpu.mhz,
                 ramPct = ramPct, ramUsedMb = ramMb, resP = resP,
-                tempC = tempC, powerW = powerW
+                tempC = tempC, gpuTempC = gpuTempC, powerW = powerW
             ),
             fg, deltas
         )
@@ -198,35 +217,28 @@ class Sampler(private val ctx: Context) {
         return out.toLongArray()
     }
 
-    /** Suhu tertinggi (zona termal + baterai) dan daya perangkat. Cadangan: BatteryManager tanpa Shizuku. */
-    private fun readThermalPower(pwr: List<String>, zones: List<String>): Pair<Float, Float> {
+    /** Daya perangkat (W) dari arus x tegangan baterai. Cadangan: BatteryManager tanpa Shizuku. */
+    private fun readPower(pwr: List<String>): Float {
         var cur = 0L
         var volt = 0L
-        var batt = -1f
         for (l in pwr) {
             if (l.length < 3 || l[1] != ':') continue
             val v = l.substring(2).trim().toLongOrNull() ?: continue
             when (l[0]) {
                 'I' -> cur = v
                 'V' -> volt = v
-                'T' -> batt = Parsers.batteryTempC(v)
             }
         }
-        var temp = maxOf(Parsers.maxTempC(zones), batt)
         var power = Parsers.powerW(cur, volt)
-        if (temp < 0f || power < 0f) {
+        if (power < 0f) {
             val i: Intent? = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            if (temp < 0f && i != null) {
-                val t = i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
-                if (t > 0) temp = t / 10f
-            }
-            if (power < 0f && i != null) {
+            if (i != null) {
                 val mv = i.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1).toLong()
                 val ua = bm.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
                 power = Parsers.powerW(ua, mv)
             }
         }
-        return Pair(temp, power)
+        return power
     }
 
     private fun quote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
