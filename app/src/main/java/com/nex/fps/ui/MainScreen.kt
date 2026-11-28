@@ -495,9 +495,6 @@ private fun MonitorTab(ui: UiState, actions: Actions) {
                     Chip("Teks ringkas", cfg.style == OverlayConfig.STYLE_TEXT, Modifier.weight(1f)) { ui.update { c -> c.copy(style = OverlayConfig.STYLE_TEXT) } }
                     Chip("Lingkaran", cfg.style == OverlayConfig.STYLE_GAUGE, Modifier.weight(1f)) { ui.update { c -> c.copy(style = OverlayConfig.STYLE_GAUGE) } }
                 }
-                if (cfg.position == OverlayConfig.POS_FREE) {
-                    Text("Bebas: geser panel overlay dengan jari saat game terbuka.", color = GhMuted, fontSize = 11.sp)
-                }
             }
         }
 
