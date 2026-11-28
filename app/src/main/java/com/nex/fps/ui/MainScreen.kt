@@ -623,18 +623,19 @@ private val MetricDefs = listOf(
     MetricDef("Avg Power", "W", GhGreen, 1, true, "Daya (Watt)")
 )
 
-private fun seriesOf(s: Session, m: Int): List<Float> = when (m) {
+/** src: sumber suhu, 0 = CPU, 1 = GPU (hanya dipakai metrik suhu). */
+private fun seriesOf(s: Session, m: Int, src: Int): List<Float> = when (m) {
     0, 1 -> s.fps
     2 -> s.frameMs
-    3 -> s.temp
+    3 -> if (src == 1) s.tempGpu else s.temp
     else -> s.power
 }
 
-private fun aggOf(s: Session, m: Int): Float = when (m) {
+private fun aggOf(s: Session, m: Int, src: Int): Float = when (m) {
     0 -> s.avgFps
     1 -> s.low5Fps
     2 -> s.avgFrameMs
-    3 -> s.maxTemp
+    3 -> if (src == 1) s.maxTempGpu else s.maxTemp
     else -> s.avgPower
 }
 
@@ -659,6 +660,7 @@ private fun HistoryTab(ui: UiState) {
     val live by SessionStore.live.collectAsState()
     var selId by rememberSaveable { mutableStateOf(-1L) }
     var metric by rememberSaveable { mutableStateOf(0) }
+    var tempSrc by rememberSaveable { mutableStateOf(0) }
     var confirmClear by remember { mutableStateOf(false) }
     val sel = items.firstOrNull { it.id == selId } ?: items.firstOrNull()
 
@@ -707,10 +709,13 @@ private fun HistoryTab(ui: UiState) {
             // 5 kartu ringkasan; ketuk untuk mengganti grafik
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (i in MetricDefs.indices) {
-                    MetricTile(MetricDefs[i], aggOf(sel, i), i == metric, Modifier.weight(1f)) { metric = i }
+                    MetricTile(
+                        MetricDefs[i], if (i == 3) (if (tempSrc == 1) "Max GPU" else "Max CPU") else MetricDefs[i].label,
+                        aggOf(sel, i, tempSrc), i == metric, Modifier.weight(1f)
+                    ) { metric = i }
                 }
             }
-            ChartCard(sel, metric, Modifier.weight(1f))
+            ChartCard(sel, metric, tempSrc, { tempSrc = it }, Modifier.weight(1f))
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (s in items) {
                     HistoryRow(s, s.id == sel.id, onSelect = { selId = s.id }, onDelete = { SessionStore.delete(s.id) })
@@ -749,7 +754,7 @@ private fun HistoryTab(ui: UiState) {
 }
 
 @Composable
-private fun MetricTile(def: MetricDef, value: Float, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun MetricTile(def: MetricDef, label: String, value: Float, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val shape = RoundedCornerShape(14.dp)
     Column(
         modifier
@@ -760,7 +765,7 @@ private fun MetricTile(def: MetricDef, value: Float, selected: Boolean, modifier
             .padding(vertical = 8.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(def.label, color = GhMuted, fontSize = 10.sp, maxLines = 1)
+        Text(label, color = GhMuted, fontSize = 10.sp, maxLines = 1)
         Spacer(Modifier.height(2.dp))
         Text(
             if (value >= 0f) fmt(value, def.decimals) else "–",
@@ -771,16 +776,26 @@ private fun MetricTile(def: MetricDef, value: Float, selected: Boolean, modifier
 }
 
 @Composable
-private fun ChartCard(s: Session, metric: Int, modifier: Modifier) {
+private fun ChartCard(s: Session, metric: Int, src: Int, onSrc: (Int) -> Unit, modifier: Modifier) {
     val def = MetricDefs[metric]
-    val values = seriesOf(s, metric)
-    var sel by remember(s.id, metric) { mutableStateOf(-1) }
-    val ref = aggOf(s, metric)
+    val values = seriesOf(s, metric, src)
+    var sel by remember(s.id, metric, src) { mutableStateOf(-1) }
+    val ref = aggOf(s, metric, src)
 
     GhCardBox(modifier.heightIn(min = 120.dp)) {
         Column(Modifier.fillMaxSize()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(def.title, color = GhText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1)
+                Text(
+                    def.title, color = GhText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                    modifier = if (metric == 3) Modifier else Modifier.weight(1f)
+                )
+                if (metric == 3) {
+                    Spacer(Modifier.width(8.dp))
+                    MiniChip("CPU", src == 0) { onSrc(0) }
+                    Spacer(Modifier.width(4.dp))
+                    MiniChip("GPU", src == 1) { onSrc(1) }
+                    Spacer(Modifier.weight(1f))
+                }
                 if (values.isNotEmpty()) {
                     val idx = sel
                     Text(
@@ -795,7 +810,7 @@ private fun ChartCard(s: Session, metric: Int, modifier: Modifier) {
             Spacer(Modifier.height(6.dp))
             if (values.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text("Sensor ini tidak tersedia di perangkat.", color = GhMuted, fontSize = 13.sp)
+                    Text(if (metric == 3) "Sensor suhu ${if (src == 1) "GPU" else "CPU"} tidak tersedia." else "Sensor ini tidak tersedia di perangkat.", color = GhMuted, fontSize = 13.sp)
                 }
             } else {
                 LineChart(
@@ -812,6 +827,23 @@ private fun ChartCard(s: Session, metric: Int, modifier: Modifier) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MiniChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .height(26.dp)
+            .clip(shape)
+            .background(if (selected) GhRed.copy(alpha = 0.18f) else GhCard2)
+            .border(1.dp, if (selected) GhRed else Color.Transparent, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = if (selected) GhRed else GhMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
     }
 }
 
