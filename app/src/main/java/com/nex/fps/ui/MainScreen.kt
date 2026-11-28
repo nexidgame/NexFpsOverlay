@@ -76,10 +76,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.nex.fps.OverlayConfig
 import com.nex.fps.OverlayService
+import com.nex.fps.OverlayView
+import com.nex.fps.SAMPLE_SNAPSHOT
 import com.nex.fps.Prefs
 import com.nex.fps.Session
 import com.nex.fps.SessionStore
@@ -484,17 +487,69 @@ private fun MonitorTab(ui: UiState, actions: Actions) {
                     Chip("Kanan", cfg.position == OverlayConfig.POS_RIGHT, Modifier.weight(1f)) { ui.update { c -> c.copy(position = OverlayConfig.POS_RIGHT) } }
                     Chip("Bebas", cfg.position == OverlayConfig.POS_FREE, Modifier.weight(1f)) { ui.update { c -> c.copy(position = OverlayConfig.POS_FREE) } }
                 }
-                Spacer(Modifier.height(2.dp))
-                Text("Gaya", color = GhText, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Chip("Teks ringkas", cfg.style == OverlayConfig.STYLE_TEXT, Modifier.weight(1f)) { ui.update { c -> c.copy(style = OverlayConfig.STYLE_TEXT) } }
-                    Chip("Lingkaran", cfg.style == OverlayConfig.STYLE_GAUGE, Modifier.weight(1f)) { ui.update { c -> c.copy(style = OverlayConfig.STYLE_GAUGE) } }
+                if (!ready) {
+                    // Setup belum selesai: ruang sempit, pakai pilihan ringkas.
+                    Spacer(Modifier.height(2.dp))
+                    Text("Gaya", color = GhText, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Chip("Teks ringkas", cfg.style == OverlayConfig.STYLE_TEXT, Modifier.weight(1f)) { ui.update { c -> c.copy(style = OverlayConfig.STYLE_TEXT) } }
+                        Chip("Lingkaran", cfg.style == OverlayConfig.STYLE_GAUGE, Modifier.weight(1f)) { ui.update { c -> c.copy(style = OverlayConfig.STYLE_GAUGE) } }
+                    }
                 }
                 if (cfg.position == OverlayConfig.POS_FREE) {
                     Text("Bebas: geser panel overlay dengan jari saat game terbuka.", color = GhMuted, fontSize = 11.sp)
                 }
             }
         }
+
+        // Pratinjau gaya overlay: ketuk salah satu untuk memilih
+        if (ready) {
+            StyleCard(cfg.style == OverlayConfig.STYLE_TEXT, "Teks saja", cfg, OverlayConfig.STYLE_TEXT, 10.dp) {
+                ui.update { c -> c.copy(style = OverlayConfig.STYLE_TEXT) }
+            }
+            StyleCard(cfg.style == OverlayConfig.STYLE_GAUGE, "Seperti gambar", cfg, OverlayConfig.STYLE_GAUGE, 8.dp) {
+                ui.update { c -> c.copy(style = OverlayConfig.STYLE_GAUGE) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverlayPreview(cfg: OverlayConfig, styleMode: Int) {
+    AndroidView(
+        factory = { c -> OverlayView(c) },
+        update = { v ->
+            v.configure(cfg.showFps, cfg.showCpu, cfg.showGpu, cfg.showRam, styleMode)
+            v.update(SAMPLE_SNAPSHOT)
+        }
+    )
+}
+
+@Composable
+private fun StyleCard(selected: Boolean, caption: String, cfg: OverlayConfig, styleMode: Int, vPad: Dp, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(18.dp)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(if (selected) GhBlueDeep.copy(alpha = 0.45f) else GhCard)
+            .border(if (selected) 1.5.dp else 1.dp, if (selected) GhBlue else GhLine, shape)
+            .clickable(onClick = onClick)
+            .padding(8.dp)
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Brush.linearGradient(listOf(Color(0xFF1C2638), Color(0xFF0D121B))))
+                .padding(vertical = vPad),
+            contentAlignment = Alignment.Center
+        ) { OverlayPreview(cfg, styleMode) }
+        Text(
+            caption, color = GhMuted, fontSize = 10.sp,
+            modifier = Modifier.align(Alignment.TopStart).padding(start = 10.dp, top = 6.dp)
+        )
+        Box(Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 6.dp)) { CheckDot(selected, 20.dp) }
     }
 }
 
