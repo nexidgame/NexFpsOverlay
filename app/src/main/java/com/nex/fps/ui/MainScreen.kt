@@ -14,6 +14,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -93,6 +94,7 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.log10
@@ -613,33 +615,57 @@ private fun SetupCard(
 // Tab 2: Riwayat sesi (ringkasan, grafik, daftar maksimal 5)
 // ======================================================================
 
-private class MetricDef(val label: String, val unit: String, val color: Color, val decimals: Int, val zeroBased: Boolean, val title: String)
+private val GhViolet = Color(0xFFB388FF)
+private val RefWhite = Color(0xCCFFFFFF)
 
-private val MetricDefs = listOf(
-    MetricDef("Avg FPS", "fps", GhBlue, 0, true, "FPS per detik"),
-    MetricDef("5% Low", "fps", GhAmber, 0, true, "FPS per detik, garis = 5% Low"),
-    MetricDef("Frametime", "ms", GhCyan, 1, true, "Frametime (ms)"),
-    MetricDef("Max Temp", "°C", GhRed, 0, false, "Suhu (°C)"),
-    MetricDef("Avg Power", "W", GhGreen, 1, true, "Daya (Watt)")
+/** Satu tampilan grafik: judul, seri, nilai ringkasan (juga garis acuan) dan teks sekitarnya. */
+private class Spec(
+    val tileLabel: String,
+    val title: String,
+    val unit: String,
+    val decimals: Int,          // -1 = otomatis (untuk varian)
+    val zeroBased: Boolean,
+    val color: Color,
+    val values: List<Float>,
+    val value: Float,
+    val refPrefix: String,
+    val refColor: Color,
+    val minLabel: String,
+    val maxLabel: String,
+    val hiCap: Float = -1f
 )
 
-/** src: sumber suhu, 0 = CPU, 1 = GPU, 2 = BAT (hanya dipakai metrik suhu). */
-private fun seriesOf(s: Session, m: Int, src: Int): List<Float> = when (m) {
-    0, 1 -> s.fps
-    2 -> s.frameMs
-    3 -> when (src) { 1 -> s.tempGpu; 2 -> s.tempBat; else -> s.temp }
-    else -> s.power
-}
-
-private fun aggOf(s: Session, m: Int, src: Int): Float = when (m) {
-    0 -> s.avgFps
-    1 -> s.low5Fps
-    2 -> s.avgFrameMs
-    3 -> when (src) { 1 -> s.maxTempGpu; 2 -> s.maxTempBat; else -> s.maxTemp }
-    else -> s.avgPower
+/**
+ * m = kartu (0 FPS, 1 5% Low, 2 Frametime, 3 Suhu, 4 Daya); sub = pilihan di dalam kartu:
+ * kartu 0: 0 AVG / 1 MAX / 2 MIN, kartu 2 (slider): 0 Frametime / 1 Smoothness / 2 Variance,
+ * kartu 3: 0 CPU / 1 GPU / 2 BAT.
+ */
+private fun chartSpec(s: Session, m: Int, sub: Int): Spec = when (m) {
+    0 -> when (sub) {
+        1 -> Spec("Max FPS", "FPS tertinggi per detik", "fps", 0, true, GhBlue, s.fpsMax, s.maxFps, "Puncak ", RefWhite, "Terendah", "Puncak")
+        2 -> Spec("Min FPS", "FPS terendah per detik", "fps", 0, true, GhBlue, s.fpsMin, s.minFps, "Terendah ", RefWhite, "Terendah", "Tertinggi")
+        else -> Spec("Avg FPS", "FPS per detik", "fps", 0, true, GhBlue, s.fps, s.avgFps, "Rata-rata ", RefWhite, "Min", "Maks")
+    }
+    1 -> Spec("5% Low", "FPS per detik, garis = 5% Low", "fps", 0, true, GhAmber, s.fps, s.low5Fps, "5% Low ", GhAmber, "Min", "Maks")
+    2 -> when (sub) {
+        1 -> Spec("Smoothness", "FPS Smoothness (%)", "%", 0, true, GhGreen, s.smooth, s.avgSmooth, "Rata-rata ", RefWhite, "Min", "Maks", 100f)
+        2 -> Spec("Variance", "Variance (ms²)", "ms²", -1, true, GhViolet, s.variance, s.varianceAll, "Total ", RefWhite, "Min", "Maks")
+        else -> Spec("Frametime", "Frametime (ms)", "ms", 1, true, GhCyan, s.frameMs, s.avgFrameMs, "Rata-rata ", RefWhite, "Min", "Maks")
+    }
+    3 -> Spec(
+        "Max ${tempName(sub)}", "Suhu (°C)", "°C", 0, false, GhRed,
+        when (sub) { 1 -> s.tempGpu; 2 -> s.tempBat; else -> s.temp },
+        when (sub) { 1 -> s.maxTempGpu; 2 -> s.maxTempBat; else -> s.maxTemp },
+        "Maks ", RefWhite, "Min", "Maks"
+    )
+    else -> Spec("Avg Power", "Daya (Watt)", "W", 1, true, GhGreen, s.power, s.avgPower, "Rata-rata ", RefWhite, "Min", "Maks")
 }
 
 private fun tempName(src: Int): String = when (src) { 1 -> "GPU"; 2 -> "BAT"; else -> "CPU" }
+
+/** decimals -1: otomatis (tanpa desimal bila besar). */
+private fun fmtV(v: Float, decimals: Int): String =
+    if (decimals >= 0) fmt(v, decimals) else if (abs(v) >= 100f) fmt(v, 0) else fmt(v, 1)
 
 private fun fmt(v: Float, decimals: Int): String = String.format(Locale.getDefault(), "%.${decimals}f", v)
 
@@ -663,6 +689,9 @@ private fun HistoryTab(ui: UiState) {
     var selId by rememberSaveable { mutableStateOf(-1L) }
     var metric by rememberSaveable { mutableStateOf(0) }
     var tempSrc by rememberSaveable { mutableStateOf(0) }
+    var fpsSub by rememberSaveable { mutableStateOf(0) }
+    var ftPage by rememberSaveable { mutableStateOf(0) }
+    val subOf = { i: Int -> when (i) { 0 -> fpsSub; 2 -> ftPage; 3 -> tempSrc; else -> 0 } }
     var confirmClear by remember { mutableStateOf(false) }
     val sel = items.firstOrNull { it.id == selId } ?: items.firstOrNull()
 
@@ -710,14 +739,19 @@ private fun HistoryTab(ui: UiState) {
         } else {
             // 5 kartu ringkasan; ketuk untuk mengganti grafik
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (i in MetricDefs.indices) {
-                    MetricTile(
-                        MetricDefs[i], if (i == 3) "Max ${tempName(tempSrc)}" else MetricDefs[i].label,
-                        aggOf(sel, i, tempSrc), i == metric, Modifier.weight(1f)
-                    ) { metric = i }
+                for (i in 0..4) {
+                    MetricTile(chartSpec(sel, i, subOf(i)), i == metric, Modifier.weight(1f)) { metric = i }
                 }
             }
-            ChartCard(sel, metric, tempSrc, { tempSrc = it }, Modifier.weight(1f))
+            ChartCard(
+                sel, metric, subOf(metric),
+                { v ->
+                    if (metric == 0) fpsSub = v
+                    else if (metric == 2) ftPage = v
+                    else if (metric == 3) tempSrc = v
+                },
+                Modifier.weight(1f)
+            )
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (s in items) {
                     HistoryRow(s, s.id == sel.id, onSelect = { selId = s.id }, onDelete = { SessionStore.delete(s.id) })
@@ -756,76 +790,139 @@ private fun HistoryTab(ui: UiState) {
 }
 
 @Composable
-private fun MetricTile(def: MetricDef, label: String, value: Float, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun MetricTile(spec: Spec, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val shape = RoundedCornerShape(14.dp)
     Column(
         modifier
             .clip(shape)
-            .background(if (selected) def.color.copy(alpha = 0.16f) else GhCard)
-            .border(1.dp, if (selected) def.color else GhLine, shape)
+            .background(if (selected) spec.color.copy(alpha = 0.16f) else GhCard)
+            .border(1.dp, if (selected) spec.color else GhLine, shape)
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(label, color = GhMuted, fontSize = 10.sp, maxLines = 1)
+        Text(spec.tileLabel, color = GhMuted, fontSize = 10.sp, maxLines = 1)
         Spacer(Modifier.height(2.dp))
         Text(
-            if (value >= 0f) fmt(value, def.decimals) else "–",
-            color = if (selected) def.color else GhText, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1
+            if (spec.value >= 0f) fmtV(spec.value, spec.decimals) else "–",
+            color = if (selected) spec.color else GhText, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1
         )
-        Text(def.unit, color = GhMuted, fontSize = 10.sp, maxLines = 1)
+        Text(spec.unit, color = GhMuted, fontSize = 10.sp, maxLines = 1)
     }
 }
 
 @Composable
-private fun ChartCard(s: Session, metric: Int, src: Int, onSrc: (Int) -> Unit, modifier: Modifier) {
-    val def = MetricDefs[metric]
-    val values = seriesOf(s, metric, src)
-    var sel by remember(s.id, metric, src) { mutableStateOf(-1) }
-    val ref = aggOf(s, metric, src)
+private fun ChartCard(s: Session, metric: Int, sub: Int, onSub: (Int) -> Unit, modifier: Modifier) {
+    val spec = chartSpec(s, metric, sub)
+    val values = spec.values
+    var sel by remember(s.id, metric, sub) { mutableStateOf(-1) }
+    val chips: List<String> = when (metric) {
+        0 -> listOf("AVG", "MAX", "MIN")
+        3 -> listOf("CPU", "GPU", "BAT")
+        else -> emptyList()
+    }
+    val pager = metric == 2          // Frametime / Smoothness / Variance: geser kiri-kanan
+    val last = 2
+
+    // Area sentuh geser: header dan sumbu waktu. Grafiknya sendiri dipakai untuk melihat nilai.
+    val swipe = if (pager) {
+        Modifier.pointerInput(sub) {
+            var dx = 0f
+            detectHorizontalDragGestures(
+                onDragStart = { dx = 0f },
+                onDragEnd = {
+                    if (dx < -50f && sub < last) onSub(sub + 1)
+                    else if (dx > 50f && sub > 0) onSub(sub - 1)
+                },
+                onDragCancel = { },
+                onHorizontalDrag = { change, amount ->
+                    dx += amount
+                    change.consume()
+                }
+            )
+        }
+    } else Modifier
+
+    val readout: String = if (values.isEmpty()) "" else {
+        val idx = sel
+        if (idx in values.indices) {
+            val t = if (values.size > 1) s.durationSec * idx / (values.size - 1) else 0
+            "${fmtV(values[idx], spec.decimals)} ${spec.unit} · ${fmtClock(t)}"
+        } else {
+            "${spec.minLabel} ${fmtV(values.min(), spec.decimals)} · ${spec.maxLabel} ${fmtV(values.max(), spec.decimals)}"
+        }
+    }
 
     GhCardBox(modifier.heightIn(min = 120.dp)) {
         Column(Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    def.title, color = GhText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
-                    modifier = if (metric == 3) Modifier else Modifier.weight(1f)
-                )
-                if (metric == 3) {
+            if (pager) {
+                Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    for (i in 0..last) {
+                        Box(
+                            Modifier
+                                .padding(horizontal = 3.dp)
+                                .height(6.dp)
+                                .width(if (i == sub) 16.dp else 6.dp)
+                                .clip(CircleShape)
+                                .background(if (i == sub) spec.color else Color(0xFF3A3A42))
+                                .clickable { onSub(i) }
+                        )
+                    }
+                }
+            }
+            if (chips.isNotEmpty()) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(spec.title, color = GhText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                     Spacer(Modifier.width(8.dp))
-                    MiniChip("CPU", src == 0) { onSrc(0) }
-                    Spacer(Modifier.width(4.dp))
-                    MiniChip("GPU", src == 1) { onSrc(1) }
-                    Spacer(Modifier.width(4.dp))
-                    MiniChip("BAT", src == 2) { onSrc(2) }
-                    Spacer(Modifier.weight(1f))
+                    for (i in chips.indices) {
+                        if (i > 0) Spacer(Modifier.width(4.dp))
+                        MiniChip(chips[i], sub == i, spec.color) { onSub(i) }
+                    }
                 }
                 if (values.isNotEmpty()) {
-                    val idx = sel
                     Text(
-                        if (idx in values.indices) {
-                            val t = if (values.size > 1) s.durationSec * idx / (values.size - 1) else 0
-                            "${fmt(values[idx], def.decimals)} ${def.unit} · ${fmtClock(t)}"
-                        } else "Min ${fmt(values.min(), def.decimals)} · Maks ${fmt(values.max(), def.decimals)}",
-                        color = def.color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
+                        readout, color = spec.color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                     )
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().then(swipe).heightIn(min = 32.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        spec.title, color = GhText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                    )
+                    if (values.isNotEmpty()) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(readout, color = spec.color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    }
                 }
             }
             Spacer(Modifier.height(6.dp))
             if (values.isEmpty()) {
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(if (metric == 3) "Sensor suhu ${tempName(src)} tidak tersedia." else "Sensor ini tidak tersedia di perangkat.", color = GhMuted, fontSize = 13.sp)
+                Box(Modifier.weight(1f).fillMaxWidth().then(swipe), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (metric == 3) "Sensor suhu ${tempName(sub)} tidak tersedia." else "Data tidak tersedia (sesi lama atau sensor kosong).",
+                        color = GhMuted, fontSize = 13.sp, textAlign = TextAlign.Center
+                    )
                 }
             } else {
                 LineChart(
-                    values = values, color = def.color,
-                    ref = ref, refLabel = (if (metric == 1) "5% Low " else if (metric == 3) "Maks " else "Rata-rata ") + (if (ref >= 0f) fmt(ref, def.decimals) else ""),
-                    refColor = if (metric == 1) GhAmber else Color(0xCCFFFFFF),
-                    zeroBased = def.zeroBased, sel = sel, onSel = { sel = it },
+                    values = values, color = spec.color,
+                    ref = spec.value,
+                    refLabel = spec.refPrefix + (if (spec.value >= 0f) fmtV(spec.value, spec.decimals) else ""),
+                    refColor = spec.refColor,
+                    zeroBased = spec.zeroBased, hiCap = spec.hiCap, sel = sel, onSel = { sel = it },
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
-                Spacer(Modifier.height(4.dp))
-                Row(Modifier.fillMaxWidth().padding(start = 34.dp)) {
+            }
+            Row(
+                Modifier.fillMaxWidth().then(swipe).heightIn(min = 30.dp).padding(start = 34.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (values.isNotEmpty()) {
                     Text("0:00", color = GhMuted, fontSize = 10.sp, modifier = Modifier.weight(1f))
                     Text(fmtClock(s.durationSec), color = GhMuted, fontSize = 10.sp)
                 }
@@ -835,19 +932,19 @@ private fun ChartCard(s: Session, metric: Int, src: Int, onSrc: (Int) -> Unit, m
 }
 
 @Composable
-private fun MiniChip(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun MiniChip(label: String, selected: Boolean, accent: Color, onClick: () -> Unit) {
     val shape = RoundedCornerShape(50)
     Box(
         Modifier
             .height(26.dp)
             .clip(shape)
-            .background(if (selected) GhRed.copy(alpha = 0.18f) else GhCard2)
-            .border(1.dp, if (selected) GhRed else Color.Transparent, shape)
+            .background(if (selected) accent.copy(alpha = 0.18f) else GhCard2)
+            .border(1.dp, if (selected) accent else Color.Transparent, shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = if (selected) GhRed else GhMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = if (selected) accent else GhMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -865,7 +962,7 @@ private fun niceCeil(x: Float): Float {
 @Composable
 private fun LineChart(
     values: List<Float>, color: Color, ref: Float, refLabel: String, refColor: Color,
-    zeroBased: Boolean, sel: Int, onSel: (Int) -> Unit, modifier: Modifier
+    zeroBased: Boolean, hiCap: Float, sel: Int, onSel: (Int) -> Unit, modifier: Modifier
 ) {
     val tm = rememberTextMeasurer()
     val n = values.size
@@ -882,7 +979,7 @@ private fun LineChart(
     var hi: Float
     if (zeroBased) {
         lo = 0f
-        hi = niceCeil(vMax * 1.1f)
+        hi = if (hiCap > 0f) hiCap else niceCeil(vMax * 1.1f)
     } else {
         lo = floor(vMin - 2f)
         hi = ceil(vMax + 2f)
